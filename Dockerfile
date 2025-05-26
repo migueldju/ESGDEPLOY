@@ -7,49 +7,47 @@ echo "🚀 Preparing for Google Cloud deployment..."
 mkdir -p backend/build
 
 # Build del frontend
-echo "📦 Building frontend..."
-cd frontend
+# --------------------------
+# Etapa 1: Build de frontend
+# --------------------------
+FROM node:18 AS frontend-builder
+WORKDIR /app
 
-# Instalar dependencias
-echo "  Installing dependencies..."
-npm ci
+# Copiamos solo los archivos necesarios para instalar dependencias y build
+COPY frontend/package*.json ./frontend/
+RUN cd frontend && npm install
 
-# Build del frontend
-echo "  Building React app..."
-npm run build
+COPY frontend ./frontend
+RUN cd frontend && npm run build
 
-# Verificar que el build se creó
-if [ ! -d "dist" ] && [ ! -d "build" ]; then
-    echo "❌ Frontend build failed - no dist or build directory found"
-    exit 1
-fi
+# --------------------------
+# Etapa 2: Backend con Flask
+# --------------------------
+FROM python:3.11-slim
 
-# Copiar archivos built al backend
-echo "  Copying built files..."
-if [ -d "dist" ]; then
-    cp -r dist/* ../backend/build/
-    echo "  ✅ Copied from dist/"
-elif [ -d "build" ]; then
-    cp -r build/* ../backend/build/
-    echo "  ✅ Copied from build/"
-fi
+# Crear directorio de trabajo
+WORKDIR /app
 
-cd ..
+# Instalar dependencias del sistema (por ejemplo para psycopg2 o faiss)
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gcc \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Verificar que los archivos se copiaron
-if [ ! -f "backend/build/index.html" ]; then
-    echo "❌ Frontend files not copied correctly"
-    exit 1
-fi
+# Copiar requerimientos e instalar
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-echo "✅ Frontend build completed and copied to backend/build/"
+# Copiar el backend completo
+COPY backend/ .
 
-# Limpiar node_modules del frontend para reducir tamaño
-echo "🧹 Cleaning up frontend node_modules..."
-rm -rf frontend/node_modules
+# Copiar los archivos build del frontend (desde la primera etapa)
+COPY --from=frontend-builder /app/frontend/dist ./build
 
-echo "🎉 Build preparation completed successfully!"
-echo "📋 Ready for deployment:"
-echo "  - Frontend built and copied to backend/build/"
-echo "  - Frontend node_modules removed"
-echo "  - Ready for Docker build"
+# Exponer puerto (Flask suele correr en el 8080 en Cloud Run)
+EXPOSE 8080
+
+# Comando para arrancar Flask con gunicorn
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "app:app"]
