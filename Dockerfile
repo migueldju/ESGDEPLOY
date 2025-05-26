@@ -1,80 +1,55 @@
-# Use Python 3.11 slim image for better performance
-FROM python:3.11-slim
+#!/bin/bash
+# build-for-cloud.sh - Build script para deployment en Google Cloud
 
-# Set environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONOPTIMIZE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+echo "🚀 Preparing for Google Cloud deployment..."
 
-# Set working directory
-WORKDIR /app
+# Crear directorio de build si no existe
+mkdir -p backend/build
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+# Build del frontend
+echo "📦 Building frontend..."
+cd frontend
 
-# Install Node.js for frontend build
-RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
+# Instalar dependencias
+echo "  Installing dependencies..."
+npm ci
 
-# Copy package files first (for better Docker layer caching)
-COPY frontend/package*.json ./frontend/
-COPY backend/requirements.txt ./backend/
+# Build del frontend
+echo "  Building React app..."
+npm run build
 
-# Install Python dependencies
-RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r backend/requirements.txt
+# Verificar que el build se creó
+if [ ! -d "dist" ] && [ ! -d "build" ]; then
+    echo "❌ Frontend build failed - no dist or build directory found"
+    exit 1
+fi
 
-# Install Node dependencies and build frontend
-COPY frontend/ ./frontend/
-RUN cd frontend && \
-    npm ci --only=production && \
-    npm run build && \
-    rm -rf node_modules
+# Copiar archivos built al backend
+echo "  Copying built files..."
+if [ -d "dist" ]; then
+    cp -r dist/* ../backend/build/
+    echo "  ✅ Copied from dist/"
+elif [ -d "build" ]; then
+    cp -r build/* ../backend/build/
+    echo "  ✅ Copied from build/"
+fi
 
-# Copy backend code
-COPY backend/ ./backend/
+cd ..
 
-# Copy built frontend to backend's build directory
-RUN cp -r frontend/dist/* backend/build/ 2>/dev/null || \
-    cp -r frontend/build/* backend/build/ 2>/dev/null || \
-    echo "Frontend build directory not found, continuing..."
+# Verificar que los archivos se copiaron
+if [ ! -f "backend/build/index.html" ]; then
+    echo "❌ Frontend files not copied correctly"
+    exit 1
+fi
 
-# Create logs directory
-RUN mkdir -p backend/logs
+echo "✅ Frontend build completed and copied to backend/build/"
 
-# Set working directory to backend
-WORKDIR /app/backend
+# Limpiar node_modules del frontend para reducir tamaño
+echo "🧹 Cleaning up frontend node_modules..."
+rm -rf frontend/node_modules
 
-# Create non-root user for security
-RUN useradd --create-home --shell /bin/bash app && \
-    chown -R app:app /app
-USER app
-
-# Expose port (Cloud Run uses PORT env variable)
-EXPOSE 8080
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
-
-# Start the application
-CMD exec gunicorn \
-    --bind 0.0.0.0:$PORT \
-    --workers 2 \
-    --worker-class sync \
-    --worker-connections 1000 \
-    --timeout 300 \
-    --keepalive 5 \
-    --max-requests 1000 \
-    --max-requests-jitter 100 \
-    --preload \
-    --access-logfile - \
-    --error-logfile - \
-    --log-level info \
-    app:app
+echo "🎉 Build preparation completed successfully!"
+echo "📋 Ready for deployment:"
+echo "  - Frontend built and copied to backend/build/"
+echo "  - Frontend node_modules removed"
+echo "  - Ready for Docker build"
