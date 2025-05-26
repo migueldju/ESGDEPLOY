@@ -1,34 +1,31 @@
-#!/bin/bash
-# build-for-cloud.sh - Build script para deployment en Google Cloud
+# Multi-stage build para optimizar la imagen final
+FROM node:20-alpine AS frontend-builder
 
-echo "🚀 Preparing for Google Cloud deployment..."
+WORKDIR /app
 
-# Crear directorio de build si no existe
-mkdir -p backend/build
+# Copiar archivos de configuración de npm
+COPY frontend/package*.json ./frontend/
+RUN cd frontend && npm ci
+
+# Copiar código fuente del frontend
+COPY frontend ./frontend
 
 # Build del frontend
-# --------------------------
-# Etapa 1: Build de frontend
-# --------------------------
-FROM node:18 AS frontend-builder
-WORKDIR /app
-
-# Copiamos solo los archivos necesarios para instalar dependencias y build
-COPY frontend/package*.json ./frontend/
-RUN cd frontend && npm install
-
-COPY frontend ./frontend
 RUN cd frontend && npm run build
 
-# --------------------------
-# Etapa 2: Backend con Flask
-# --------------------------
-FROM python:3.11-slim
+# Etapa de producción con Python
+FROM python:3.13-slim
 
-# Crear directorio de trabajo
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONOPTIMIZE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
 WORKDIR /app
 
-# Instalar dependencias del sistema (por ejemplo para psycopg2 o faiss)
+# Instalar dependencias del sistema
 RUN apt-get update && apt-get install -y \
     build-essential \
     gcc \
@@ -36,18 +33,44 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copiar requerimientos e instalar
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copiar y instalar dependencias de Python
+COPY backend/requirements.txt ./
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Copiar el backend completo
-COPY backend/ .
+# Copiar código del backend
+COPY backend/ ./
 
-# Copiar los archivos build del frontend (desde la primera etapa)
+# Copiar frontend compilado desde la etapa anterior
 COPY --from=frontend-builder /app/frontend/dist ./build
 
-# Exponer puerto (Flask suele correr en el 8080 en Cloud Run)
+# Crear directorio de logs
+RUN mkdir -p logs
+
+# Crear usuario no-root para seguridad
+RUN useradd --create-home --shell /bin/bash app && \
+    chown -R app:app /app
+USER app
+
+# Exponer puerto
 EXPOSE 8080
 
-# Comando para arrancar Flask con gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "app:app"]
+# Health check
+HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Comando para iniciar la aplicación
+CMD exec gunicorn \
+    --bind 0.0.0.0:$PORT \
+    --workers 2 \
+    --worker-class sync \
+    --worker-connections 1000 \
+    --timeout 300 \
+    --keepalive 5 \
+    --max-requests 1000 \
+    --max-requests-jitter 100 \
+    --preload \
+    --access-logfile - \
+    --error-logfile - \
+    --log-level info \
+    app:app
