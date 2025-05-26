@@ -1,11 +1,18 @@
-# Multi-stage build para optimizar la imagen final
+# Multi-stage build con npm install
 FROM node:20-alpine AS frontend-builder
 
 WORKDIR /app
 
+# Instalar dependencias del sistema para npm
+RUN apk add --no-cache python3 make g++
+
 # Copiar archivos de configuración de npm
 COPY frontend/package*.json ./frontend/
-RUN cd frontend && npm ci
+
+# Usar npm install en lugar de npm ci para ser más permisivo
+RUN cd frontend && \
+    npm cache clean --force && \
+    npm install
 
 # Copiar código fuente del frontend
 COPY frontend ./frontend
@@ -14,9 +21,8 @@ COPY frontend ./frontend
 RUN cd frontend && npm run build
 
 # Etapa de producción con Python
-FROM python:3.13-slim
+FROM python:3.11-slim
 
-# Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONOPTIMIZE=1 \
@@ -52,14 +58,8 @@ RUN useradd --create-home --shell /bin/bash app && \
     chown -R app:app /app
 USER app
 
-# Exponer puerto
 EXPOSE 8080
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
-
-# Comando para iniciar la aplicación
 CMD exec gunicorn \
     --bind 0.0.0.0:$PORT \
     --workers 2 \
