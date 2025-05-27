@@ -1,4 +1,42 @@
-# Dockerfile temporal - Solo backend con frontend estático mínimo
+# Multi-stage build con verificación de directorios
+FROM node:20-alpine AS frontend-builder
+
+WORKDIR /app
+
+# Instalar herramientas necesarias para compilación
+RUN apk add --no-cache python3 make g++
+
+# Copiar archivos de configuración
+COPY frontend/package*.json ./frontend/
+
+# Instalar dependencias con fallback
+RUN cd frontend && \
+    (npm ci || (echo "npm ci failed, using npm install" && npm install))
+
+# Copiar código fuente
+COPY frontend ./frontend
+
+# Build con verificación detallada
+RUN cd frontend && \
+    echo "=== Starting build ===" && \
+    npm run build && \
+    echo "=== Build completed, checking output ===" && \
+    ls -la && \
+    echo "=== Checking for dist directory ===" && \
+    (ls -la dist/ && echo "✅ dist/ found") || \
+    (ls -la build/ && echo "✅ build/ found") || \
+    (echo "❌ No build output found" && ls -la)
+
+# Crear un directorio de build consistente
+RUN cd frontend && \
+    mkdir -p /tmp/frontend-build && \
+    (cp -r dist/* /tmp/frontend-build/ 2>/dev/null || \
+     cp -r build/* /tmp/frontend-build/ 2>/dev/null || \
+     echo "No build files to copy") && \
+    echo "=== Final build verification ===" && \
+    ls -la /tmp/frontend-build/
+
+# Etapa de producción
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -25,56 +63,17 @@ RUN pip install --upgrade pip && \
 # Copiar backend
 COPY backend/ ./
 
-# Crear frontend mínimo funcional
-RUN mkdir -p build && \
-    cat > build/index.html << 'EOF'
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESGenerator</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 40px; background-color: #f5f7fa; }
-        .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        h1 { color: #2a66b3; text-align: center; }
-        .message { background: #e7f3ff; padding: 20px; border-radius: 5px; margin: 20px 0; }
-        .api-link { background: #2a66b3; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 10px 0; }
-        .status { color: green; font-weight: bold; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>ESGenerator Backend</h1>
-        <div class="message">
-            <p><strong class="status">✅ Backend is running successfully!</strong></p>
-            <p>The backend API is available and ready to serve requests.</p>
-            <p>Frontend build is temporarily disabled to resolve deployment issues.</p>
-        </div>
-        
-        <h3>Available API Endpoints:</h3>
-        <ul>
-            <li><a href="/api/check-auth" class="api-link">Check Authentication</a></li>
-            <li><a href="/api/health" class="api-link">Health Check</a></li>
-        </ul>
-        
-        <div class="message">
-            <p><strong>Note:</strong> This is a temporary page. The full React frontend will be restored once build issues are resolved.</p>
-        </div>
-    </div>
+# Crear directorio build y copiar frontend
+RUN mkdir -p build
+COPY --from=frontend-builder /tmp/frontend-build/ ./build/
 
-    <script>
-        // Simple JS to test API connectivity
-        fetch('/api/check-auth')
-            .then(response => response.json())
-            .then(data => console.log('API Response:', data))
-            .catch(error => console.error('API Error:', error));
-    </script>
-</body>
-</html>
-EOF
+# Verificar que los archivos se copiaron
+RUN echo "=== Backend build verification ===" && \
+    ls -la build/ && \
+    (ls build/index.html && echo "✅ Frontend files copied successfully") || \
+    echo "⚠️ Frontend files may be missing"
 
-# Crear logs directory
+# Crear directorio de logs
 RUN mkdir -p logs
 
 # Crear usuario no-root
