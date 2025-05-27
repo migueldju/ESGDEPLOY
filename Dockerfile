@@ -1,42 +1,4 @@
-# Multi-stage build con verificación de directorios
-FROM node:20-alpine AS frontend-builder
-
-WORKDIR /app
-
-# Instalar herramientas necesarias para compilación
-RUN apk add --no-cache python3 make g++
-
-# Copiar archivos de configuración
-COPY frontend/package*.json ./frontend/
-
-# Instalar dependencias con fallback
-RUN cd frontend && \
-    (npm ci || (echo "npm ci failed, using npm install" && npm install))
-
-# Copiar código fuente
-COPY frontend ./frontend
-
-# Build con verificación detallada
-RUN cd frontend && \
-    echo "=== Starting build ===" && \
-    npm run build && \
-    echo "=== Build completed, checking output ===" && \
-    ls -la && \
-    echo "=== Checking for dist directory ===" && \
-    (ls -la dist/ && echo "✅ dist/ found") || \
-    (ls -la build/ && echo "✅ build/ found") || \
-    (echo "❌ No build output found" && ls -la)
-
-# Crear un directorio de build consistente
-RUN cd frontend && \
-    mkdir -p /tmp/frontend-build && \
-    (cp -r dist/* /tmp/frontend-build/ 2>/dev/null || \
-     cp -r build/* /tmp/frontend-build/ 2>/dev/null || \
-     echo "No build files to copy") && \
-    echo "=== Final build verification ===" && \
-    ls -la /tmp/frontend-build/
-
-# Etapa de producción
+# Dockerfile simplificado - todo en una imagen
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -47,13 +9,27 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Instalar dependencias del sistema
+# Instalar Node.js y dependencias del sistema
 RUN apt-get update && apt-get install -y \
     build-essential \
     gcc \
     libpq-dev \
     curl \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# Verificar instalaciones
+RUN node --version && npm --version && python --version
+
+# Copiar y build frontend
+COPY frontend/ ./frontend/
+RUN cd frontend && \
+    npm install && \
+    npm run build && \
+    echo "Build completed, checking output:" && \
+    ls -la && \
+    (ls -la dist/ || ls -la build/ || echo "No build directory found")
 
 # Instalar dependencias de Python
 COPY backend/requirements.txt ./
@@ -63,17 +39,18 @@ RUN pip install --upgrade pip && \
 # Copiar backend
 COPY backend/ ./
 
-# Crear directorio build y copiar frontend
-RUN mkdir -p build
-COPY --from=frontend-builder /tmp/frontend-build/ ./build/
+# Mover frontend build al lugar correcto
+RUN mkdir -p build && \
+    (cp -r frontend/dist/* build/ 2>/dev/null || \
+     cp -r frontend/build/* build/ 2>/dev/null || \
+     echo "No frontend build to copy") && \
+    echo "Final build check:" && \
+    ls -la build/
 
-# Verificar que los archivos se copiaron
-RUN echo "=== Backend build verification ===" && \
-    ls -la build/ && \
-    (ls build/index.html && echo "✅ Frontend files copied successfully") || \
-    echo "⚠️ Frontend files may be missing"
+# Limpiar frontend source y node_modules para reducir tamaño
+RUN rm -rf frontend/
 
-# Crear directorio de logs
+# Crear logs directory
 RUN mkdir -p logs
 
 # Crear usuario no-root
