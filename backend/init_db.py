@@ -48,8 +48,8 @@ def main():
         return False
     
     # Check environment variables
-    database_url = os.environ.get('DATABASE_URL')
-    secret_key = os.environ.get('SECRET_KEY')
+    database_url = "mysql+pymysql://root:lopoleto@127.0.0.1:3306/esgenerator"
+    secret_key = "edf146172e87bade25a6a1fd1be10142402e445dc9976476efd67ce1e38d010e"
     
     if not database_url:
         print("❌ DATABASE_URL environment variable not set")

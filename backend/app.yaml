@@ -1,0 +1,51 @@
+runtime: python311
+env: standard
+
+instance_class: F2
+
+automatic_scaling:
+  min_instances: 0
+  max_instances: 10
+  target_cpu_utilization: 0.6
+
+entrypoint: gunicorn --bind :$PORT main:app
+
+env_variables:
+  FLASK_ENV: production
+
+# Los secretos deben ir en la sección de "secret_env"
+secret_env:
+  DATABASE_URL:
+    project_id: your-gcp-project-id  # opcional si es el mismo proyecto
+    secret: DATABASE_URL_CLOUDSQL
+    version: latest
+  NVIDIA_API_KEY:
+    secret: NVIDIA_API_KEY
+    version: latest
+  ALLOWED_ORIGINS:
+    secret: ALLOWED_ORIGINS
+    version: latest
+  FRONTEND_URL:
+    secret: FRONTEND_URL
+    version: latest
+  SECRET_KEY:
+    secret: SECRET_KEY
+    version: latest
+  MAIL_SENDGRID_API_KEY:
+    secret: MAIL_SENDGRID_API_KEY
+    version: latest
+  MAIL_DEFAULT_SENDER:
+    secret: MAIL_DEFAULT_SENDER
+    version: latest
+
+beta_settings:
+  cloud_sql_instances: esgenerator:europe-southwest1:esgenerator-db
+
+handlers:
+  - url: /static
+    static_dir: build/static
+    secure: always
+
+  - url: /.*
+    script: auto
+    secure: always
